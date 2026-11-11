@@ -1,0 +1,20 @@
+Leyden
+Copyright (c) 2026 The Leyden Authors (https://github.com/leyden-repo)
+Licensed under the MIT License (see LICENSE).
+
+Third-party acknowledgements
+----------------------------
+
+tools/leyden-redact.py adapts ideas and detection rules from the following projects:
+
+1. gitleaks (https://github.com/gitleaks/gitleaks)
+   The provider rule table (secret patterns) is derived from gitleaks.
+   Copyright (c) 2019 Zachary Rice
+   Licensed under the MIT License.
+
+2. detect-secrets (https://github.com/Yelp/detect-secrets)
+   The Shannon-entropy fallback and the `pragma: allowlist secret` inline escape
+   follow the approach used by detect-secrets.
+   Copyright (c) 2018 Yelp, Inc.
+   Licensed under the Apache License, Version 2.0
+   (https://www.apache.org/licenses/LICENSE-2.0).

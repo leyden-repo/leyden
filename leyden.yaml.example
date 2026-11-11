@@ -1,0 +1,98 @@
+# Leyden configuration. `leyden init` writes this for you; edit by hand afterwards if you like.
+#
+# Format: a deliberately MINIMAL subset of YAML parsed by tools/_config.py (two/three-level
+# `key: value`, indentation-scoped, inline [a, b] lists). No pyyaml dependency. Keep to the shapes
+# shown here. Environment variables (LEYDEN_*) always win over values in this file.
+#
+# Two files, one rule:
+#   leyden.yaml         committed. Taxonomy + KB-wide settings. In team mode the OWNER writes it and
+#                       nobody else changes the taxonomy afterwards (it names directories and keys).
+#   leyden.local.yaml   gitignored. Your identity and personal knobs. Merged on top of leyden.yaml.
+#                       In individual mode `leyden init` puts everything in leyden.yaml instead.
+
+kb:
+  name: My KB                   # display name (README, index.md, dashboards)
+  mode: individual              # individual | team
+  preset: deployment            # deployment | application | support | product | generic | custom
+
+# The four renamable slots. Only needed when preset is `custom` or you override one slot of a
+# preset. Singular becomes the frontmatter `type:` and the cross-reference key on other entries
+# (`customer: acme`); plural becomes the directory name (`customers/`). Lowercase-kebab only.
+# taxonomy:
+#   entity:
+#     singular: customer
+#     plural: customers
+#   context:
+#     singular: deployment
+#     plural: deployments
+#   case:
+#     singular: issue
+#     plural: issues
+#   playbook:
+#     singular: runbook
+#     plural: runbooks
+
+engineer:                       # goes to leyden.local.yaml in team mode
+  name: Your Name               # informational only: no tool reads it
+  slug: yourslug                # stamps author: on every entry you create
+  email: you@example.com        # identifies your own sent mail in capture, nothing else
+
+ticketing:
+  provider: linear              # informational only: no tool reads it; url_base drives ticket links
+  url_base: ""                  # e.g. https://linear.app/<your-org>/issue/ ; empty = ticket ids stay plain text
+
+push:
+  interval_seconds: 72000       # 20h: first session of the day pushes (LEYDEN_PUSH_INTERVAL wins)
+  drain_wait_seconds: 900       # how long the push cycle waits for an in-flight capture drain
+                                # before giving up and retrying next session (LEYDEN_DRAIN_WAIT
+                                # wins). Both jobs start from the same SessionStart hook and the
+                                # drain takes its lock first, so a zero wait means the push almost
+                                # never runs.
+
+capture:
+  model: sonnet                 # headless capture model, a `claude --model` value (LEYDEN_CAPTURE_MODEL wins)
+
+retrieval:
+  max_rank: 500                 # frecency aging cap (LEYDEN_MAX_RANK wins)
+  min_evidence: 5               # reconcile noise floor (LEYDEN_MIN_EVIDENCE wins)
+  min_score: 3.0                # search hook: a hit's BM25 score must reach this to be injected
+  min_score_ratio: 0.35         # ...and this fraction of the best hit's score (`leyden tap` ignores both)
+
+# lint:
+#   skip_files: [some/doc.md]   # extra paths the lint should not check. Markdown at the KB ROOT
+#                               # other than index/open/closed/log.md is skipped automatically as
+#                               # repo documentation, so this is only for docs kept elsewhere.
+
+# health:                       # nothing to set: `leyden doctor` and the session-start health line read
+#                               # .leyden/ (capture.log, .last-push, metrics/health.log, health/*.flag)
+
+# team:                         # written by `leyden team join <url>` into leyden.local.yaml
+#   shared_dir: /path/to/your/clone/of/<team-repo>  # a separate repo, never inside the leyden/ tool checkout
+#   prefer: true                # team-repo hits rank first at equal score (false: personal first);
+#                               # set this one in leyden.yaml, not leyden.local.yaml
+
+# workspace:                    # optional hooks into the workspace the KB lives in
+#   entity_config_paths: [configs/<slug>/, ../ops/<Name>/]   # appended to the search
+#                               # hint as "then their config: ..." (<slug>/<Name> substituted)
+#   search_allow: [workspace-config/some-knowledge-file.md]   # files under the backup mirror that
+#                               # ARE knowledge and may be indexed (everything else there is skipped)
+#   mirrors: ["~/.claude/skills/my-skill|_user-claude/skills/my-skill"]   # "<src>|<dest-rel>" pairs
+#                               # snapshotted into workspace-config/ on each batched push
+
+# promotion:
+#   playbook_target_dir: /path/to/your/docs-repo/docs/troubleshooting   # `leyden promote` target
+#                               # for playbooks (entity records promote to team.shared_dir instead)
+
+# ticketing.prefixes: [ABC, XYZ]   # optional; capture uses these as the ticket-id examples
+
+# capture.workspace_dirs: [/other/workspace]   # extra dirs whose Claude transcripts the reconcile
+#                               # backstop should scan (default: the KB's own workspace)
+
+# Per-entity enrichment. The folder on disk (<entities>/<slug>/) is the registry of record; this
+# adds aliases that cannot be derived from a folder name (search, capture and reconcile all match
+# them). email_domains is informational for now: capture does not read it. The key is the entity
+# plural from your taxonomy (`customers:` here); `registry:` is accepted as a role-neutral alias.
+customers:
+  example-corp:
+    aliases: [example, excorp]
+    email_domains: [example.com]

@@ -1,0 +1,41 @@
+# This repo is the Leyden TOOL: pull-only, it never holds knowledge base data. Your KB is its own
+# repo (created by `leyden init`, default <you>-kb next to this checkout) with its own .gitignore.
+
+# Which KB this checkout serves: one path (relative to this checkout's parent, or absolute),
+# written by `leyden init`. Machine-local.
+.kb-path
+
+# A workspace's Claude settings and linked skills never belong in the tool repo
+.claude/
+
+# Runtime state lives in <KB>/.leyden/. Listed here only for the legacy layout, where the KB is
+# this checkout itself.
+.leyden/
+graph.html
+issues.html
+leyden.local.yaml
+
+# Leftovers from checkouts used before the tool/KB split (runtime state used to live in tools/)
+tools/index.db
+tools/index.db.tmp*
+tools/metrics/
+tools/capture.log
+tools/capture-queue.txt*
+tools/offsets/
+tools/.capture*
+tools/.git-op.lock/
+tools/.last-*
+tools/decisions.log
+tools/redactions.log
+tools/.secret-quarantine
+
+# Python bytecode (the hooks set PYTHONDONTWRITEBYTECODE=1; this covers running tools by hand)
+__pycache__/
+*.pyc
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

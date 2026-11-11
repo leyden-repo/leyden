@@ -1,0 +1,8 @@
+# The redactor's selftest is full of made-up secrets on purpose (each one must be caught).
+# Keep gitleaks' default rules everywhere else.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secrets in the redaction selftest"
+paths = ['''tools/leyden-redact\.py''']

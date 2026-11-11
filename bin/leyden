@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# leyden: one entry point for the knowledge base. Solve it once, keep the charge.
+#
+# Setup (or say "set up leyden" to Claude in the workspace: skills/leyden-setup)
+#   leyden setup --personal <url|new|local> [--team <url>] [--workspace DIR] [--dry-run]
+#                                everything in one go: KB, hooks, CLAUDE.md, skills, team, doctor
+#   leyden init [--kb PATH] [--remote URL] [--write-hooks SETTINGS]
+#                                create or connect just the KB (asks nothing when git config
+#                                has your name and email; `leyden init --help` for every flag)
+#
+# Everyday
+#   leyden doctor                is the install healthy? PASS/WARN/FAIL per item, with the fix
+#   leyden tap <words...>        search the KB the way the prompt hook does, print the hits
+#   leyden leak                  what is going stale: open cases untouched 14+ days, dashboard drift
+#   leyden sweep [list|apply|status|gather|schedule|unschedule|schedule-label]
+#                                weekly stale-case sweep; `schedule` turns on the Monday job (/kb-sweep)
+#   leyden team join <url|path> [--yes] [--clone-to DIR]
+#                                connect your KB to the team repo (clones it next to the tool)
+#   leyden team status | leave | index-export
+#                                connection details | disconnect | refresh the team snapshot search reads
+#   leyden share                 list resolved cases not yet shared (it shares nothing); to share
+#                                one, ask Claude: "push the acme export-timeout issue to the team repo"
+#   leyden remind add <when> <text> | list | due | done <id> | snooze <id> <when> | rm <id>
+#                                dated follow-ups, shown at session start when they are due
+#
+# Data
+#   leyden export --customer <slug> [--out DIR]   export bundle for one customer, secrets removed
+#   leyden forget <slug|path|glob> [--apply]      remove a customer or case (prints the history rewrite)
+#
+# Maintenance (the hooks run these for you)
+#   leyden charge [transcript]   capture now: drain the session queue, or capture one transcript
+#   leyden push                  commit and push the KB now (normally once a day at session start)
+#   leyden new <slot> <slug>     scaffold an entry from the templates (entity/playbook/project)
+#   leyden new <case|context> <entity|internal> <slug>
+#                                a case or context lives under an entity (or internal)
+#   leyden lint | index | dash | graph | metrics | reconcile | promote
+#
+# Pronounced LAY-den, after the Leyden jar, the first capacitor.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+T="$(cd "$HERE/../tools" && pwd)"
+# The KB is a separate repo; tools/_kb.sh finds it (LEYDEN_HOME, then <tool>/.kb-path, then a
+# legacy KB inside this checkout). init and doctor handle "no KB yet" themselves.
+LDN_HAVE_KB=1
+. "$T/_kb.sh"; [ "$LDN_KB_OK" = 1 ] || LDN_HAVE_KB=0
+PY="${LEYDEN_PYTHON:-$(command -v python3 2>/dev/null || echo /usr/bin/python3)}"
+export LEYDEN_PYTHON="$PY"   # every child tool and hook script uses the same interpreter
+
+# Help is the header block above, up to the "Pronounced" line.
+usage() { sed -n '2,/^# Pronounced/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# warn_skill_clash: /kb-sweep must be Leyden's skill. A same-name skill from another toolchain
+# (an older copy) wins otherwise, and the sweep then follows that toolchain's paths.
+warn_skill_clash() {
+  local d sk mine
+  mine="$(cd "$HERE/../skills/kb-sweep" 2>/dev/null && pwd -P)"
+  for d in ${CLAUDE_PROJECT_DIR:+"$CLAUDE_PROJECT_DIR"} ${KB:+"$(dirname "$KB")"}; do
+    sk="$d/.claude/skills/kb-sweep"
+    [ -e "$sk" ] || continue
+    if [ "$(cd "$sk" 2>/dev/null && pwd -P)" != "$mine" ]; then
+      echo "warning: $sk is not Leyden's kb-sweep skill, so /kb-sweep would run that one." >&2
+      echo "         Move it aside and link Leyden's: ln -s \"$mine\" \"$sk\"" >&2
+    fi
+    return 0
+  done
+}
+
+cmd="${1:-}"; shift || true
+# Verbs whose script has no --help of its own used to RUN on --help (dash rewrote files, tap
+# searched for "help"). Show the overview instead; verbs with real argparse help keep theirs.
+case "$cmd:${1:-}" in
+  init:*|setup:*|export:*|forget:*|remind:*|team:*|metrics:*) ;;
+  *:-h|*:--help) usage; exit 0 ;;
+esac
+case "$cmd" in
+  init|setup|doctor|""|-h|--help|help) ;;
+  *) [ "$LDN_HAVE_KB" = 1 ] || { ldn_no_kb_msg; exit 1; } ;;
+esac
+case "$cmd" in
+  init)
+    # No terminal check here: init itself refuses (exit 2) only when it would have to ASK, so a
+    # re-run on a configured KB (doctor's fix hints) works from a script.
+    "$PY" "$T/leyden-init.py" "$@"; rc=$?
+    # Re-resolve: init may just have written .kb-path.
+    . "$T/_kb.sh"
+    [ "$rc" -eq 0 ] && warn_skill_clash
+    exit "$rc" ;;
+  setup)     exec "$PY" "$T/leyden-init.py" setup "$@" ;;
+  doctor)    exec "$T/leyden-doctor.sh" "$@" ;;
+  export)    exec "$PY" -I -B "$T/leyden-export.py" "$@" ;;
+  forget)    exec "$PY" -I -B "$T/leyden-forget.py" "$@" ;;
+  new)       exec "$PY" "$T/leyden-new.py" "$@" ;;
+  remind)    exec "$PY" -I -B "$T/leyden-remind.py" "$@" ;;
+
+  charge)
+    # One transcript goes through the drain's lock like everything else (--one): running the
+    # worker directly let parallel charges race on the offset store and lose commits.
+    if [ -n "${1:-}" ]; then
+      exec "$T/leyden-drain.sh" --one "$1"
+    fi
+    exec "$T/leyden-drain.sh" --now ;;
+
+  tap)
+    q="$*"
+    [ -n "${q// /}" ] || { echo "usage: leyden tap <words...>" >&2; exit 2; }
+    "$PY" -I -B -c 'import json,sys; print(json.dumps({"prompt": sys.argv[1]}))' "$q" \
+      | LEYDEN_TAP=1 "$T/leyden-search.sh" \
+      | "$PY" -I -B -c '
+import json,sys
+raw=sys.stdin.read().strip()
+if not raw: print("no matches"); sys.exit(0)
+d=json.loads(raw)
+ctx=(d.get("hookSpecificOutput") or {}).get("additionalContext") or d.get("additionalContext") or ""
+print(ctx.strip() or "no matches")' ;;
+
+  leak)
+    "$PY" "$T/leyden-issues.py" --brief
+    echo
+    "$PY" "$T/leyden-lint.py" --stale "$@"
+    # dashboard drift (open.md vs case statuses): the full lint finds it, --stale does not
+    drift="$("$PY" "$T/leyden-lint.py" 2>/dev/null | grep 'missing from the dashboard\|open.md:' || true)"
+    [ -z "$drift" ] || { echo; echo "dashboard drift (fix: leyden dash --sync-open --fix):"; echo "$drift"; } ;;
+
+  lint)      exec "$PY" "$T/leyden-lint.py" "$@" ;;
+  index)     exec "$PY" "$T/leyden-index.py" "$@" ;;
+  dash)      exec "$PY" "$T/leyden-issues.py" "$@" ;;
+  graph)     "$PY" "$T/leyden-graph.py" "$@" && echo "wrote $KB/graph.html" ;;
+  metrics)   exec "$T/leyden-metrics.sh" "$@" ;;
+  reconcile) exec "$T/leyden-reconcile.sh" "$@" ;;
+  push)      exec "$T/leyden-push-if-stale.sh" --force "$@" ;;
+  promote)   exec "$T/leyden-promote.sh" "$@" ;;
+  team)      exec "$PY" "$T/leyden-team.py" "$@" ;;
+
+  share)     exec "$T/leyden-share.sh" "$@" ;;
+
+  sweep)
+    sub="${1:-list}"; shift || true
+    case "$sub" in
+      list|apply|status|mark-gathered|schedule-label) exec "$PY" "$T/leyden-sweep.py" "$sub" "$@" ;;
+      gather) exec "$T/leyden-sweep-gather.sh" --force "$@" ;;
+      schedule|unschedule)
+        # One launchd job per KB: Monday 09:00, read-only gather. The label comes from the sweep
+        # tool (unique per KB path, so two KBs with the same folder name no longer overwrite each
+        # other's job); older checkouts without that subcommand fall back to the folder name.
+        label="$("$PY" "$T/leyden-sweep.py" schedule-label 2>/dev/null | head -n 1)"
+        case "$label" in
+          com.*) ;;
+          *) slug="$(basename "$KB" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+             label="com.leyden.kb-sweep.$slug" ;;
+        esac
+        plist="$HOME/Library/LaunchAgents/$label.plist"
+        if [ "$sub" = unschedule ]; then
+          launchctl unload "$plist" 2>/dev/null || true
+          if [ -f "$plist" ]; then rm -f "$plist" && echo "removed $label"; else echo "no sweep scheduled"; fi
+          exit 0
+        fi
+        mkdir -p "$HOME/Library/LaunchAgents" "$LDN_STATE/sweep"
+        cb="$(command -v claude || echo "$HOME/.local/bin/claude")"
+        [ -x "$cb" ] || echo "warning: claude CLI not found ($cb): the scheduled gather will only log a reminder" >&2
+        "$PY" -I -B - "$plist" "$label" "$T/leyden-sweep-gather.sh" "$KB" "$cb" "$LDN_STATE/sweep/cron.log" <<'EOF'
+import plistlib, sys, os
+plist, label, script, kb, claude, log = sys.argv[1:7]
+path = ":".join([os.path.dirname(claude), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+with open(plist, "wb") as f:
+    plistlib.dump({"Label": label, "ProgramArguments": ["/bin/bash", script],
+                   "EnvironmentVariables": {"LEYDEN_HOME": kb, "CLAUDE_BIN": claude, "PATH": path},
+                   "StartCalendarInterval": {"Weekday": 1, "Hour": 9, "Minute": 0},
+                   "StandardOutPath": log, "StandardErrorPath": log, "RunAtLoad": False}, f)
+EOF
+        launchctl unload "$plist" 2>/dev/null || true
+        launchctl load "$plist" && echo "scheduled $label: Mondays 09:00, log $LDN_STATE/sweep/cron.log"
+        warn_skill_clash ;;
+      *) echo "usage: leyden sweep [list|apply|status|gather|schedule|unschedule|schedule-label]" >&2; exit 2 ;;
+    esac ;;
+
+  ""|-h|--help|help) usage ;;
+  *) echo "leyden: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
+esac

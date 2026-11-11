@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          fail=0
+          for f in bin/leyden tools/*.sh; do bash -n "$f" || { echo "FAIL $f"; fail=1; }; done
+          exit $fail
+      - name: Python compiles
+        run: python3 -m py_compile tools/*.py
+      - name: Redaction selftest
+        run: python3 -I tools/leyden-redact.py --selftest
